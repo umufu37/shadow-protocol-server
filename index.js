@@ -273,6 +273,17 @@ io.on('connection', (socket) => {
     room.votes = {};
     room.lastTeamVoteResult = null;
     room.lastMissionResult = null;
+    
+    // 3 minute timer
+    room.voteDeadline = Date.now() + 180000;
+    if (room.teamVoteTimer) clearTimeout(room.teamVoteTimer);
+    room.teamVoteTimer = setTimeout(() => {
+      if (room.phase === 'team_voting') {
+        evaluateTeamVotes(room);
+        setTimeout(() => processBotVotes(room), 1000);
+        broadcastGameState(room);
+      }
+    }, 180000);
 
     broadcastGameState(room);
     setTimeout(() => processBotVotes(room), 1000); // bots will vote
@@ -286,6 +297,7 @@ io.on('connection', (socket) => {
     room.votes[socket.id] = vote;
 
     if (Object.keys(room.votes).length === room.players.length) {
+      if (room.teamVoteTimer) clearTimeout(room.teamVoteTimer);
       evaluateTeamVotes(room);
       setTimeout(() => processBotVotes(room), 1000); // bots might need to act in next phase
     }
@@ -309,13 +321,52 @@ io.on('connection', (socket) => {
     callback({ success: true });
   });
 
+  socket.on('play_again', (roomCode, callback) => {
+    const room = rooms[roomCode];
+    if (!room || room.status !== 'finished') return callback({ success: false });
+
+    // Sadece host başlatabilsin diye kontrol edebiliriz
+    const player = room.players.find(p => p.id === socket.id);
+    if (!player || !player.isHost) return callback({ success: false, message: 'Sadece kurucu yeniden başlatabilir.' });
+
+    // Odayı lobi ayarlarına döndür
+    room.status = 'lobby';
+    room.winner = null;
+    room.winReason = null;
+    room.missions = [];
+    room.proposedTeam = [];
+    room.votes = {};
+    room.missionVotes = {};
+    room.lastTeamVoteResult = null;
+    room.lastMissionResult = null;
+    
+    // Rolleri temizle
+    room.players.forEach(p => {
+       p.role = null;
+    });
+
+    // Tüm oyuncuları lobiye at
+    io.to(roomCode).emit('back_to_lobby', room);
+    callback({ success: true });
+  });
+
   socket.on('disconnect', () => {
     for (const [roomCode, room] of Object.entries(rooms)) {
       const playerIndex = room.players.findIndex(p => p.id === socket.id);
       if (playerIndex !== -1) {
-        room.players.splice(playerIndex, 1);
-        io.to(roomCode).emit('room_update', room);
-        if (room.players.length === 0) delete rooms[roomCode];
+        if (room.status === 'playing') {
+           // Turn player into a bot so the game can continue
+           const p = room.players[playerIndex];
+           p.isBot = true;
+           p.name = p.name + " (Bot)";
+           broadcastGameState(room);
+           setTimeout(() => processBotVotes(room), 1000);
+        } else {
+           // In lobby, just remove them
+           room.players.splice(playerIndex, 1);
+           io.to(roomCode).emit('room_update', room);
+           if (room.players.length === 0) delete rooms[roomCode];
+        }
         break;
       }
     }
