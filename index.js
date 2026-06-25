@@ -43,10 +43,11 @@ function shuffle(array) {
 }
 
 const broadcastGameState = (room) => {
+  const { teamVoteTimer, ...cleanRoom } = room;
   room.players.forEach(p => {
     if (p.isBot) return; // Bots don't have sockets
     const playerGameState = {
-      ...room,
+      ...cleanRoom,
       me: p,
       spies: p.role === 'spy' ? room.players.filter(x => x.role === 'spy').map(x => x.name) : []
     };
